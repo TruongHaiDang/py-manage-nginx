@@ -54,7 +54,7 @@ class CertificateStatus:
         )
 
 
-def list_sites(root: Path = DEFAULT_ROOT, directory: str = "sites-enabled") -> list[Path]:
+def list_sites(root: Path | str = DEFAULT_ROOT, directory: str = "sites-enabled") -> list[Path]:
     """Return the available Nginx site configuration files in *directory*.
 
     By default this targets ``sites-enabled`` so the result mirrors what Nginx
@@ -62,6 +62,7 @@ def list_sites(root: Path = DEFAULT_ROOT, directory: str = "sites-enabled") -> l
     back to the original file.
     """
 
+    root = Path(root)
     base = root / directory
     if not base.is_dir():
         return []

@@ -10,10 +10,20 @@ from . import manager
 
 # Default configuration template for newly provisioned sites. Using a template
 # keeps the logic simple to read and lets callers provide their own layout when
-# needed without touching the core implementation.
+# needed without touching the core implementation. The default enables HTTPS
+# and redirects HTTP traffic to the secure endpoint.
 DEFAULT_CONFIG_TEMPLATE = """server {
     listen 80;
     listen [::]:80;
+
+    server_name {server_name};
+
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
 
     server_name {server_name};
 
@@ -22,6 +32,9 @@ DEFAULT_CONFIG_TEMPLATE = """server {
 
     access_log {access_log};
     error_log {error_log};
+
+    ssl_certificate {ssl_certificate};
+    ssl_certificate_key {ssl_certificate_key};
 
     location / {
         try_files $uri $uri/ =404;
@@ -72,7 +85,8 @@ def create_hosting(
         value defaults to ``"{site_name}.conf"``.
     template:
         Custom configuration template. The string must contain ``{server_name}``,
-        ``{root}``, ``{access_log}`` and ``{error_log}`` placeholders.
+        ``{root}``, ``{access_log}``, ``{error_log}``, ``{ssl_certificate}`` and
+        ``{ssl_certificate_key}`` placeholders.
     use_sudo:
         Forwarded to the helper functions in :mod:`manager` when executing
         system commands.
@@ -120,12 +134,18 @@ def create_hosting(
     sites_enabled_path.parent.mkdir(parents=True, exist_ok=True)
     document_root.mkdir(parents=True, exist_ok=True)
 
+    certificate_path, certificate_key_path = _default_certificate_paths(
+        normalized_server_names
+    )
+
     rendered_config = _render_config(
         template or DEFAULT_CONFIG_TEMPLATE,
         server_names=normalized_server_names,
         document_root=document_root,
         access_log=access_log_path,
         error_log=error_log_path,
+        ssl_certificate=certificate_path,
+        ssl_certificate_key=certificate_key_path,
     )
     sites_available_path.write_text(rendered_config, encoding="utf-8")
 
@@ -260,6 +280,8 @@ def _render_config(
     document_root: Path,
     access_log: Path,
     error_log: Path,
+    ssl_certificate: Path,
+    ssl_certificate_key: Path,
 ) -> str:
     """Fill the configuration template with the provided values."""
 
@@ -268,9 +290,36 @@ def _render_config(
         root=str(document_root),
         access_log=str(access_log),
         error_log=str(error_log),
+        ssl_certificate=str(ssl_certificate),
+        ssl_certificate_key=str(ssl_certificate_key),
     )
     # Ensure the file ends with a newline to comply with Unix conventions.
     return rendered.rstrip() + "\n"
+
+
+def _default_certificate_paths(server_names: Sequence[str]) -> tuple[Path, Path]:
+    """Return default certificate locations for the provided server names."""
+
+    primary = _select_certificate_name(server_names)
+    certificate_directory = Path("/etc/letsencrypt/live") / primary
+    return (
+        certificate_directory / "fullchain.pem",
+        certificate_directory / "privkey.pem",
+    )
+
+
+def _select_certificate_name(server_names: Sequence[str]) -> str:
+    """Pick a filesystem-safe name for certificate lookup."""
+
+    for candidate in server_names:
+        normalized = candidate.lstrip("*.")
+        if normalized:
+            return normalized.replace("*", "").replace("/", "")
+
+    # Fallback to the first entry stripped of path separators and wildcards.
+    fallback = server_names[0] if server_names else "default"
+    sanitized = fallback.replace("*", "").replace("/", "")
+    return sanitized or "default"
 
 
 def _validate_site_name(site_name: str) -> None:

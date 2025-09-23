@@ -1,6 +1,6 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "py-manage-nginx"
@@ -31,26 +31,25 @@ Documentation = "https://github.com/TruongHaiDang/py-manage-nginx#readme"
 Issues = "https://github.com/TruongHaiDang/py-manage-nginx/issues"
 Source = "https://github.com/TruongHaiDang/py-manage-nginx"
 
-[tool.hatch.version]
-path = "src/py-manage-nginx/__about__.py"
+[tool.setuptools]
+package-dir = {"" = "src"}
 
-[tool.hatch.envs.types]
-extra-dependencies = [
-  "mypy>=1.0.0",
-]
-[tool.hatch.envs.types.scripts]
-check = "mypy --install-types --non-interactive {args:src/py-manage-nginx tests}"
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.dynamic]
+version = { attr = "py_manage_nginx.__about__.__version__" }
 
 [tool.coverage.run]
-source_pkgs = ["py-manage-nginx", "tests"]
+source_pkgs = ["py_manage_nginx", "tests"]
 branch = true
 parallel = true
 omit = [
-  "src/py-manage-nginx/__about__.py",
+  "src/py_manage_nginx/__about__.py",
 ]
 
 [tool.coverage.paths]
-py-manage-nginx = ["src/py-manage-nginx", "*/py-manage-nginx/src/py-manage-nginx"]
+py_manage_nginx = ["src/py_manage_nginx", "*/py-manage-nginx/src/py_manage_nginx"]
 tests = ["tests", "*/py-manage-nginx/tests"]
 
 [tool.coverage.report]

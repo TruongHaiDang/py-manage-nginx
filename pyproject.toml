@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "py-manage-nginx"
+dynamic = ["version"]
+description = ''
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MIT"
+keywords = []
+authors = [
+  { name = "Trương Hải Đăng", email = "haidanghth910@gmail.com" },
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Python :: Implementation :: PyPy",
+]
+dependencies = []
+
+[project.urls]
+Documentation = "https://github.com/TruongHaiDang/py-manage-nginx#readme"
+Issues = "https://github.com/TruongHaiDang/py-manage-nginx/issues"
+Source = "https://github.com/TruongHaiDang/py-manage-nginx"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.dynamic]
+version = { attr = "py_manage_nginx.__about__.__version__" }
+
+[tool.coverage.run]
+source_pkgs = ["py_manage_nginx", "tests"]
+branch = true
+parallel = true
+omit = [
+  "src/py_manage_nginx/__about__.py",
+]
+
+[tool.coverage.paths]
+py_manage_nginx = ["src/py_manage_nginx", "*/py-manage-nginx/src/py_manage_nginx"]
+tests = ["tests", "*/py-manage-nginx/tests"]
+
+[tool.coverage.report]
+exclude_lines = [
+  "no cov",
+  "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
+]

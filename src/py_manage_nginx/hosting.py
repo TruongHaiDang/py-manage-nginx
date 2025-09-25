@@ -63,7 +63,7 @@ DEFAULT_CONFIG_TEMPLATE_NO_SSL = """server {{
 """
 
 
-__all__ = ["create_hosting", "remove_hosting"]
+__all__ = ["create_hosting", "upload_hosting_source", "remove_hosting"]
 
 
 def create_hosting(
@@ -219,6 +219,96 @@ def create_hosting(
     return reload_result
 
 
+def upload_hosting_source(
+    source: Path | str,
+    destination: Path | str,
+    *,
+    create_destination: bool = True,
+) -> Path:
+    """Copy source code into a hosting directory after cleaning it.
+
+    Parameters
+    ----------
+    source:
+        Filesystem path of the artefact that should be published. Both
+        directories and individual files are supported.
+    destination:
+        Target directory that serves the site. The folder is cleaned before the
+        new source code is copied in.
+    create_destination:
+        When ``True`` (default), missing destination directories are created on
+        the fly. Set to ``False`` to require the folder to already exist.
+
+    Returns
+    -------
+    Path
+        Absolute path to the destination directory after the upload completes.
+
+    Raises
+    ------
+    FileNotFoundError
+        If ``source`` does not exist or ``destination`` is missing while
+        ``create_destination`` is ``False``.
+    NotADirectoryError
+        If ``destination`` exists but is not a directory.
+    ValueError
+        If ``source`` and ``destination`` overlap, which would risk deleting the
+        input during cleanup.
+    """
+
+    source_path = Path(source).expanduser()
+    destination_path = Path(destination).expanduser()
+
+    if not source_path.exists():
+        raise FileNotFoundError(f"source path does not exist: {source_path}")
+
+    resolved_source = source_path.resolve()
+    resolved_destination = destination_path.resolve(strict=False)
+
+    if resolved_destination == resolved_source:
+        raise ValueError("source and destination must reference different paths")
+
+    if resolved_destination.is_relative_to(resolved_source):
+        raise ValueError("destination cannot be located inside the source tree")
+
+    if source_path.is_dir() and resolved_source.is_relative_to(resolved_destination):
+        raise ValueError("source directory cannot be located inside the destination")
+
+    if destination_path.exists():
+        if not destination_path.is_dir():
+            raise NotADirectoryError(
+                f"destination is not a directory: {destination_path}"
+            )
+    elif create_destination:
+        destination_path.mkdir(parents=True, exist_ok=True)
+    else:
+        raise FileNotFoundError(
+            f"destination path does not exist: {destination_path}"
+        )
+
+    # Remove every existing artefact to avoid mixing stale and new files.
+    if destination_path.exists():
+        _clean_directory(destination_path)
+
+    if source_path.is_dir():
+        shutil.copytree(
+            source_path,
+            destination_path,
+            dirs_exist_ok=True,
+            symlinks=True,
+        )
+    else:
+        target = destination_path / source_path.name
+        if target.exists():
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+        shutil.copy2(source_path, target)
+
+    return destination_path.resolve()
+
+
 def remove_hosting(
     site_name: str,
     *,
@@ -368,3 +458,17 @@ def _validate_site_name(site_name: str) -> None:
 
     if Path(stripped).name != stripped:
         raise ValueError("site_name must not contain path separators")
+
+
+def _clean_directory(target: Path) -> None:
+    """Remove all files and folders inside *target* without deleting it."""
+
+    for entry in target.iterdir():
+        try:
+            if entry.is_symlink() or entry.is_file():
+                entry.unlink()
+            elif entry.is_dir():
+                shutil.rmtree(entry)
+        except FileNotFoundError:
+            # Concurrent deletions are harmless; ignore them for idempotency.
+            continue

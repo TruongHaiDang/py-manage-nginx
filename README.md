@@ -29,7 +29,11 @@ sudo $(which pytest) -s -v test.py::<function name>
 ### Example
 
 ```bash
-sudo $(which pytest) -s -v test.py::test_create_hosting
+sudo $(which pytest) -s -v test.py::test_create_hosting_no_cert
+```
+
+```bash
+sudo $(which pytest) -s -v test.py::test_create_hosting_with_cert
 ```
 
 ```bash

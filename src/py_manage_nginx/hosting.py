@@ -76,6 +76,8 @@ def create_hosting(
     config_filename: str | None = None,
     template: str | None = None,
     isCert: bool = True,
+    ssl_certificate_path: Path | None = None,
+    ssl_certificate_key_path: Path | None = None,
     use_sudo: bool = False,
     nginx_binary: str = "nginx",
     controller: str = "systemctl",
@@ -113,6 +115,11 @@ def create_hosting(
     isCert:
         Toggle TLS directives in the default template. When set to ``False`` the
         generated configuration only serves plain HTTP traffic.
+    ssl_certificate_path:
+        Tùy chọn: đường dẫn tệp chứng chỉ (fullchain) dùng để chèn vào template mặc định.
+        Nếu không cung cấp, khi ``isCert`` là ``True`` sẽ tự động suy ra từ Let's Encrypt.
+    ssl_certificate_key_path:
+        Tùy chọn: đường dẫn private key khớp với ``ssl_certificate_path``.
     use_sudo:
         Forwarded to the helper functions in :mod:`manager` when executing
         system commands.
@@ -164,9 +171,13 @@ def create_hosting(
     certificate_key_path: Path | None
 
     if isCert:
-        certificate_path, certificate_key_path = _default_certificate_paths(
-            normalized_server_names
-        )
+        if ssl_certificate_path is not None and ssl_certificate_key_path is not None:
+            certificate_path = ssl_certificate_path
+            certificate_key_path = ssl_certificate_key_path
+        else:
+            certificate_path, certificate_key_path = _default_certificate_paths(
+                normalized_server_names
+            )
     else:
         certificate_path = None
         certificate_key_path = None

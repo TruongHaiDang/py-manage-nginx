@@ -5,11 +5,11 @@ import pytest
 import os
 
 
-SITE_NAME = "test-site"
+SITE_NAME = "test-site-ssl"
 SERVER_NAMES = ["test.example.com", "www.test.example.com"]
 
 
-def test_create_hosting():
+def test_create_hosting_no_cert():
     """Test tạo hosting và kiểm tra sự tồn tại trên nginx thật."""
     if os.geteuid() != 0:
         pytest.skip("Cần chạy bằng root (sudo) để test thật.")
@@ -25,7 +25,7 @@ def test_create_hosting():
         nginx_root=nginx_root,
         web_root_base=web_root_base,
         log_directory=log_directory,
-        isCert=False,
+        isCert=True,
         use_sudo=True,
         nginx_binary="nginx",
         controller="systemctl",
@@ -45,6 +45,57 @@ def test_create_hosting():
     sites = list_sites(root=nginx_root, directory="sites-enabled")
     assert f"{SITE_NAME}.conf" in [s.name for s in sites]
 
+def test_create_hosting_with_cert():
+    """Test tạo hosting với chứng chỉ tự ký (self-signed) dùng API của hosting.py."""
+    if os.geteuid() != 0:
+        pytest.skip("Cần chạy bằng root (sudo) để test thật.")
+
+    nginx_root = Path("/etc/nginx")
+    web_root_base = Path("/var/www")
+    log_directory = Path("/var/log/nginx")
+
+    # Chứng chỉ tự ký theo hướng dẫn trong README
+    cert_dir = Path("/etc/nginx/ssl/test.local")
+    fullchain_path = cert_dir / "fullchain.pem"
+    privkey_path = cert_dir / "privkey.pem"
+
+    if not (fullchain_path.exists() and privkey_path.exists()):
+        pytest.skip(
+            "Thiếu chứng chỉ tự ký. Hãy tạo theo README: openssl -> /etc/nginx/ssl/test.local"
+        )
+
+    # Sử dụng domain khớp với chứng chỉ
+    site_name_ssl: str = SITE_NAME
+    server_names_ssl: list[str] = ["test.local"]
+
+    # Tạo hosting mới chỉ định trực tiếp đường dẫn chứng chỉ tự ký qua tham số API
+    result = create_hosting(
+        site_name=site_name_ssl,
+        server_names=server_names_ssl,
+        nginx_root=nginx_root,
+        web_root_base=web_root_base,
+        log_directory=log_directory,
+        isCert=True,
+        ssl_certificate_path=fullchain_path,
+        ssl_certificate_key_path=privkey_path,
+        use_sudo=True,
+        nginx_binary="nginx",
+        controller="systemctl",
+    )
+
+    assert result.ok, f"Reload nginx thất bại: {result.stderr or result.stdout}"
+
+    # Kiểm tra sự tồn tại
+    expected_config = nginx_root / "sites-available" / f"{site_name_ssl}.conf"
+    expected_link = nginx_root / "sites-enabled" / f"{site_name_ssl}.conf"
+    document_root = web_root_base / site_name_ssl
+
+    assert expected_config.exists(), f"Thiếu file cấu hình {expected_config}"
+    assert expected_link.exists() and expected_link.is_symlink(), f"Symlink không hợp lệ {expected_link}"
+    assert document_root.is_dir(), f"Document root không tồn tại {document_root}"
+
+    sites = list_sites(root=nginx_root, directory="sites-enabled")
+    assert f"{site_name_ssl}.conf" in [s.name for s in sites]
 
 def test_remove_hosting():
     """Test remove_hosting xóa site đã tạo và idempotent khi xóa lại."""

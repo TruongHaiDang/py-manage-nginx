@@ -82,6 +82,10 @@ def upload_source_archive(
     2. Copy the provided archive into the document root directory.
     3. Extract the archive in-place to expose the site assets.
 
+    To prevent accidental data loss, the archive is validated before step 1 so
+    that invalid uploads never trigger a destructive cleanup of the document
+    root.
+
     Parameters
     ----------
     site_name:
@@ -121,6 +125,9 @@ def upload_source_archive(
     if archive_realpath == document_root_realpath or document_root_realpath in archive_realpath.parents:
         raise ValueError("archive_path must point outside of the target document root")
 
+    if not _is_zip_file(archive_path):
+        raise ValueError(f"unsupported archive format: {archive_path}")
+
     if document_root.exists():
         shutil.rmtree(document_root)
 
@@ -128,9 +135,6 @@ def upload_source_archive(
 
     destination_archive = document_root / archive_path.name
     shutil.copy2(archive_path, destination_archive)
-
-    if not _is_zip_file(destination_archive):
-        raise ValueError(f"unsupported archive format: {destination_archive}")
 
     _extract_zip(destination_archive, document_root)
     _normalize_document_root(document_root, archive_filename=destination_archive.name)

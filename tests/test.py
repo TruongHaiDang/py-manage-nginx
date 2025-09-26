@@ -10,6 +10,7 @@ from pathlib import Path
 import shutil
 import pytest
 import os
+import zipfile
 
 
 # Absolute paths for demo static site assets used in the upload helper.
@@ -261,3 +262,36 @@ def upload_static_site_to_sources(
         web_root_base=destination_base,
         remove_archive=False,
     )
+
+
+def test_upload_source_archive_rejects_directory_traversal(tmp_path):
+    site_name = "reject-traversal"
+    archive_path = tmp_path / "traversal.zip"
+
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("../escape.txt", "forbidden")
+
+    with pytest.raises(ValueError):
+        upload_source_archive(site_name, archive_path, web_root_base=tmp_path)
+
+
+def test_upload_source_archive_rejects_windows_backslashes(tmp_path):
+    site_name = "reject-windows"
+    archive_path = tmp_path / "windows.zip"
+
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("..\\escape.txt", "forbidden")
+
+    with pytest.raises(ValueError):
+        upload_source_archive(site_name, archive_path, web_root_base=tmp_path)
+
+
+def test_upload_source_archive_rejects_absolute_paths(tmp_path):
+    site_name = "reject-absolute"
+    archive_path = tmp_path / "absolute.zip"
+
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("/etc/passwd", "forbidden")
+
+    with pytest.raises(ValueError):
+        upload_source_archive(site_name, archive_path, web_root_base=tmp_path)

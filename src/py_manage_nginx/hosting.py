@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import shutil
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Sequence
 
 from . import manager
@@ -464,10 +464,79 @@ def _is_zip_file(archive_path: Path) -> bool:
 
 
 def _extract_zip(archive_path: Path, destination: Path) -> None:
-    """Extract *archive_path* into *destination* directory."""
+    """Extract *archive_path* into *destination* directory safely.
+
+    Raises
+    ------
+    ValueError
+        If any archive member resolves outside of *destination* or has an
+        otherwise unsafe filename.
+    """
+
+    resolved_destination = destination.resolve(strict=False)
 
     with zipfile.ZipFile(archive_path) as archive:
-        archive.extractall(destination)
+        members_with_targets = [
+            (member, _resolve_member_target(member, resolved_destination))
+            for member in archive.infolist()
+        ]
+
+        for member, target_path in members_with_targets:
+            if member.is_dir():
+                target_path.mkdir(parents=True, exist_ok=True)
+                _apply_zip_permissions(member, target_path)
+                continue
+
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(member, "r") as source, target_path.open("wb") as destination_file:
+                shutil.copyfileobj(source, destination_file)
+            _apply_zip_permissions(member, target_path)
+
+
+def _resolve_member_target(member: zipfile.ZipInfo, destination: Path) -> Path:
+    """Return the extraction path for *member* ensuring it stays under *destination*."""
+
+    normalized_parts = _normalized_member_parts(member)
+    target_path = destination.joinpath(*normalized_parts)
+    resolved_target = target_path.resolve(strict=False)
+
+    if resolved_target != destination and destination not in resolved_target.parents:
+        raise ValueError(
+            f"zip entry '{member.filename}' escapes the destination directory"
+        )
+
+    return target_path
+
+
+def _normalized_member_parts(member: zipfile.ZipInfo) -> tuple[str, ...]:
+    """Normalize *member* path into safe components, rejecting traversal attempts."""
+
+    sanitized = member.filename.replace("\\", "/")
+    pure_path = PurePosixPath(sanitized)
+
+    if pure_path.is_absolute():
+        raise ValueError(f"zip entry '{member.filename}' uses an absolute path")
+
+    parts: list[str] = []
+    for part in pure_path.parts:
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            raise ValueError(f"zip entry '{member.filename}' contains parent directory references")
+        parts.append(part)
+
+    if not parts and not member.is_dir():
+        raise ValueError(f"zip entry '{member.filename}' has an empty filename")
+
+    return tuple(parts)
+
+
+def _apply_zip_permissions(member: zipfile.ZipInfo, target_path: Path) -> None:
+    """Apply Unix permission bits from *member* to *target_path* when present."""
+
+    unix_mode = member.external_attr >> 16
+    if unix_mode:
+        target_path.chmod(unix_mode)
 
 
 def _normalize_document_root(document_root: Path, *, archive_filename: str) -> None:

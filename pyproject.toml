@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "py-manage-nginx"
 dynamic = ["version"]
-description = ''
+description = 'Use Python to manage Nginx on the machine.'
 readme = "README.md"
 requires-python = ">=3.8"
 license = "MIT"

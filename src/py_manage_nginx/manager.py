@@ -150,6 +150,106 @@ def test_nginx_configuration(
     return _run_command([nginx_binary, "-t"], use_sudo=use_sudo)
 
 
+def request_letsencrypt_certificate(
+    domain: str,
+    *,
+    email: str | None = None,
+    additional_domains: Sequence[str] | None = None,
+    webroot_path: Path | str | None = None,
+    certbot_binary: str = "certbot",
+    use_sudo: bool = False,
+    staging: bool = False,
+    dry_run: bool = False,
+    preferred_challenges: Sequence[str] | None = None,
+    extra_args: Sequence[str] | None = None,
+    timeout: float | None = None,
+) -> CommandResult:
+    """Request a Let's Encrypt certificate for *domain* using ``certbot``.
+
+    Parameters
+    ----------
+    domain:
+        Primary domain to be included in the certificate. Leading and trailing
+        whitespace is ignored.
+    email:
+        Optional contact email used for Let's Encrypt registration. When
+        omitted the command opts in to ``--register-unsafely-without-email`` to
+        avoid interactive prompts.
+    additional_domains:
+        Optional extra hostnames that should be secured by the same
+        certificate. Empty or duplicated values are ignored.
+    webroot_path:
+        Filesystem path served by Nginx for HTTP challenges. When omitted the
+        built-in Nginx authenticator is used instead.
+    certbot_binary:
+        Name or path of the ``certbot`` executable.
+    use_sudo:
+        Whether to execute the command through ``sudo``. This is often
+        required on production servers where certbot needs elevated privileges.
+    staging:
+        If ``True``, request the certificate from Let's Encrypt staging for
+        safe testing.
+    dry_run:
+        When set, execute a trial run without writing certificates.
+    preferred_challenges:
+        Optional challenge types (for example ``["http-01"]``) forwarded to
+        certbot through ``--preferred-challenges``.
+    extra_args:
+        Additional command line arguments appended as-is at the end of the
+        certbot invocation. Use this for advanced scenarios not covered by the
+        built-in options.
+    timeout:
+        Optional timeout passed to :func:`subprocess.run` to limit the maximum
+        execution time.
+    """
+
+    normalized_domains = _normalize_domains(domain, additional_domains)
+    if not normalized_domains:
+        raise ValueError("domain must be a non-empty string")
+
+    command: list[str] = [
+        certbot_binary,
+        "certonly",
+        "--non-interactive",
+        "--keep-until-expiring",
+        "--agree-tos",
+    ]
+
+    email_argument = (email or "").strip()
+    if email_argument:
+        command.extend(["--email", email_argument])
+    else:
+        # Avoid interactive prompts when no email is supplied. This flag is the
+        # documented way to bypass the registration requirement.
+        command.append("--register-unsafely-without-email")
+
+    if staging:
+        command.append("--staging")
+    if dry_run:
+        command.append("--dry-run")
+
+    if webroot_path is not None:
+        # ``certbot --webroot`` performs HTTP-01 validation by writing files to
+        # the provided directory, which keeps Nginx configuration untouched.
+        command.extend(["--webroot", "-w", str(Path(webroot_path))])
+    else:
+        # Fallback to the Nginx authenticator which inspects the active
+        # configuration and injects temporary validation directives.
+        command.append("--nginx")
+
+    sanitized_challenges = _sanitize_challenges(preferred_challenges)
+    if sanitized_challenges:
+        command.extend(["--preferred-challenges", sanitized_challenges])
+
+    for hostname in normalized_domains:
+        command.extend(["-d", hostname])
+
+    if extra_args:
+        command.extend(extra_args)
+
+    return _run_command(command, use_sudo=use_sudo, timeout=timeout)
+
+
 def _extract_certificate_paths(config_path: Path) -> list[Path]:
     certificate_paths: list[Path] = []
 
@@ -263,11 +363,55 @@ def _run_command(
     except subprocess.TimeoutExpired as exc:
         stdout = (exc.stdout or "").strip()
         stderr = (exc.stderr or "").strip()
-        return CommandResult(
-            command=tuple(computed_command),
-            returncode=None,
-            stdout=stdout,
-            stderr=stderr,
-            error=f"command timed out after {timeout}s",
-        )
+    return CommandResult(
+        command=tuple(computed_command),
+        returncode=None,
+        stdout=stdout,
+        stderr=stderr,
+        error=f"command timed out after {timeout}s",
+    )
+
+
+def _normalize_domains(
+    primary: str, additional: Sequence[str] | None = None
+) -> list[str]:
+    """Return a unique, ordered list of hostnames.
+
+    The first element is always derived from *primary*. Subsequent domains are
+    appended in the original order while skipping duplicates and empty
+    candidates. Whitespace surrounding each value is ignored. This keeps the
+    resulting ``certbot`` invocation stable and free from redundant ``-d``
+    parameters.
+    """
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+
+    def _add_candidate(candidate: str) -> None:
+        stripped = candidate.strip()
+        if not stripped or stripped in seen:
+            return
+        normalized.append(stripped)
+        seen.add(stripped)
+
+    _add_candidate(primary)
+
+    if additional:
+        for candidate in additional:
+            _add_candidate(candidate)
+
+    return normalized
+
+
+def _sanitize_challenges(challenges: Sequence[str] | None) -> str | None:
+    """Normalize challenge names for the ``--preferred-challenges`` flag."""
+
+    if not challenges:
+        return None
+
+    cleaned = [challenge.strip() for challenge in challenges if challenge.strip()]
+    if not cleaned:
+        return None
+    # certbot expects challenges to be comma-separated without whitespace.
+    return ",".join(cleaned)
 

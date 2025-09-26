@@ -12,16 +12,16 @@ from . import manager
 # keeps the logic simple to read and lets callers provide their own layout when
 # needed without touching the core implementation. The default enables HTTPS
 # and redirects HTTP traffic to the secure endpoint.
-DEFAULT_CONFIG_TEMPLATE = """server {
+DEFAULT_CONFIG_TEMPLATE = """server {{
     listen 80;
     listen [::]:80;
 
     server_name {server_name};
 
     return 301 https://$host$request_uri;
-}
+}}
 
-server {
+server {{
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
 
@@ -36,10 +36,30 @@ server {
     ssl_certificate {ssl_certificate};
     ssl_certificate_key {ssl_certificate_key};
 
-    location / {
+    location / {{
         try_files $uri $uri/ =404;
-    }
-}
+    }}
+}}
+"""
+
+# Alternate template that skips TLS configuration. Used when a caller does not
+# have certificates yet but still wants to provision a basic HTTP site.
+DEFAULT_CONFIG_TEMPLATE_NO_SSL = """server {{
+    listen 80;
+    listen [::]:80;
+
+    server_name {server_name};
+
+    root {root};
+    index index.html index.htm;
+
+    access_log {access_log};
+    error_log {error_log};
+
+    location / {{
+        try_files $uri $uri/ =404;
+    }}
+}}
 """
 
 
@@ -55,6 +75,9 @@ def create_hosting(
     log_directory: Path = Path("/var/log/nginx"),
     config_filename: str | None = None,
     template: str | None = None,
+    isCert: bool = True,
+    ssl_certificate_path: Path | None = None,
+    ssl_certificate_key_path: Path | None = None,
     use_sudo: bool = False,
     nginx_binary: str = "nginx",
     controller: str = "systemctl",
@@ -86,7 +109,17 @@ def create_hosting(
     template:
         Custom configuration template. The string must contain ``{server_name}``,
         ``{root}``, ``{access_log}``, ``{error_log}``, ``{ssl_certificate}`` and
-        ``{ssl_certificate_key}`` placeholders.
+        ``{ssl_certificate_key}`` placeholders when ``isCert`` is ``True``. When
+        ``isCert`` is ``False`` the default template does not reference SSL
+        placeholders, but custom templates may still do so if desired.
+    isCert:
+        Toggle TLS directives in the default template. When set to ``False`` the
+        generated configuration only serves plain HTTP traffic.
+    ssl_certificate_path:
+        Tùy chọn: đường dẫn tệp chứng chỉ (fullchain) dùng để chèn vào template mặc định.
+        Nếu không cung cấp, khi ``isCert`` là ``True`` sẽ tự động suy ra từ Let's Encrypt.
+    ssl_certificate_key_path:
+        Tùy chọn: đường dẫn private key khớp với ``ssl_certificate_path``.
     use_sudo:
         Forwarded to the helper functions in :mod:`manager` when executing
         system commands.
@@ -134,12 +167,27 @@ def create_hosting(
     sites_enabled_path.parent.mkdir(parents=True, exist_ok=True)
     document_root.mkdir(parents=True, exist_ok=True)
 
-    certificate_path, certificate_key_path = _default_certificate_paths(
-        normalized_server_names
+    certificate_path: Path | None
+    certificate_key_path: Path | None
+
+    if isCert:
+        if ssl_certificate_path is not None and ssl_certificate_key_path is not None:
+            certificate_path = ssl_certificate_path
+            certificate_key_path = ssl_certificate_key_path
+        else:
+            certificate_path, certificate_key_path = _default_certificate_paths(
+                normalized_server_names
+            )
+    else:
+        certificate_path = None
+        certificate_key_path = None
+
+    applied_template = template or (
+        DEFAULT_CONFIG_TEMPLATE if isCert else DEFAULT_CONFIG_TEMPLATE_NO_SSL
     )
 
     rendered_config = _render_config(
-        template or DEFAULT_CONFIG_TEMPLATE,
+        applied_template,
         server_names=normalized_server_names,
         document_root=document_root,
         access_log=access_log_path,
@@ -280,8 +328,8 @@ def _render_config(
     document_root: Path,
     access_log: Path,
     error_log: Path,
-    ssl_certificate: Path,
-    ssl_certificate_key: Path,
+    ssl_certificate: Path | None,
+    ssl_certificate_key: Path | None,
 ) -> str:
     """Fill the configuration template with the provided values."""
 
@@ -290,8 +338,8 @@ def _render_config(
         root=str(document_root),
         access_log=str(access_log),
         error_log=str(error_log),
-        ssl_certificate=str(ssl_certificate),
-        ssl_certificate_key=str(ssl_certificate_key),
+        ssl_certificate="" if ssl_certificate is None else str(ssl_certificate),
+        ssl_certificate_key="" if ssl_certificate_key is None else str(ssl_certificate_key),
     )
     # Ensure the file ends with a newline to comply with Unix conventions.
     return rendered.rstrip() + "\n"

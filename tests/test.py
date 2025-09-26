@@ -1,9 +1,21 @@
+"""Integration tests and utilities for py-manage-nginx."""
+
 from py_manage_nginx.manager import list_sites, reload_nginx, restart_nginx, test_nginx_configuration
-from py_manage_nginx.hosting import create_hosting, remove_hosting
+from py_manage_nginx.hosting import (
+    create_hosting,
+    remove_hosting,
+    upload_source_archive,
+)
 from pathlib import Path
+import shutil
 import pytest
 import os
+import zipfile
 
+
+# Absolute paths for demo static site assets used in the upload helper.
+STATIC_SITE_DIR = Path(__file__).parent / "static_site"
+SOURCE_CODE_HOSTING_DIR = Path(__file__).parent / "source_code_hosting"
 
 SITE_NAME = "test-site-ssl"
 SERVER_NAMES = ["test.example.com", "www.test.example.com"]
@@ -157,3 +169,129 @@ def test_restart_nginx():
 def test_test_nginx_configuration():
     result = test_nginx_configuration(use_sudo=True)
     assert result.ok, f"restart nginx failed: {result.stderr or result.stdout}"
+
+
+def test_upload_source_archive(tmp_path):
+    site_name = SITE_NAME
+    archive_base = tmp_path / "static_site"
+    shutil.make_archive(
+        str(archive_base),
+        "zip",
+        root_dir=STATIC_SITE_DIR.parent,
+        base_dir=STATIC_SITE_DIR.name,
+    )
+    archive = archive_base.with_suffix(".zip")
+
+    if os.geteuid() == 0:
+        web_root_base = Path("/var/www")
+        document_root = web_root_base / site_name
+        if document_root.exists():
+            shutil.rmtree(document_root)
+    else:
+        web_root_base = tmp_path / "web"
+        document_root = web_root_base / site_name
+
+    # Seed document root with stale content to ensure the helper wipes it first.
+    (document_root / "old-dir").mkdir(parents=True, exist_ok=True)
+    (document_root / "old-dir" / "placeholder.txt").write_text("obsolete")
+    (document_root / "legacy.txt").write_text("legacy")
+
+    result_path = upload_source_archive(
+        site_name,
+        archive,
+        web_root_base=web_root_base,
+        remove_archive=True,
+    )
+
+    assert result_path == document_root
+    assert (document_root / "index.html").is_file()
+    assert (document_root / "assets" / "logo.svg").is_file()
+    assert not (document_root / archive.name).exists()
+    assert not (document_root / "legacy.txt").exists()
+    assert not (document_root / "old-dir").exists()
+
+
+def test_upload_source_archive_keep_archive(tmp_path):
+    site_name = "keep-archive"
+    archive_base = tmp_path / "static_site"
+    shutil.make_archive(
+        str(archive_base),
+        "zip",
+        root_dir=STATIC_SITE_DIR.parent,
+        base_dir=STATIC_SITE_DIR.name,
+    )
+    archive = archive_base.with_suffix(".zip")
+
+    web_root_base = tmp_path / "web"
+    document_root = web_root_base / site_name
+
+    result_path = upload_source_archive(
+        site_name,
+        archive,
+        web_root_base=web_root_base,
+        remove_archive=False,
+    )
+
+    assert result_path == document_root
+    assert (document_root / "index.html").is_file()
+    assert (document_root / archive.name).is_file()
+
+def upload_static_site_to_sources(
+    site_name: str = SITE_NAME,
+    archive: Path | None = None,
+    destination_base: Path = SOURCE_CODE_HOSTING_DIR,
+) -> Path:
+    """Convenience wrapper for syncing the demo site into a local folder."""
+
+    destination_base.mkdir(parents=True, exist_ok=True)
+    if archive is None:
+        archive_base = destination_base / f"{site_name}_source"
+        shutil.make_archive(
+            str(archive_base),
+            "zip",
+            root_dir=STATIC_SITE_DIR.parent,
+            base_dir=STATIC_SITE_DIR.name,
+        )
+        archive_path = archive_base.with_suffix(".zip")
+    else:
+        archive_path = Path(archive)
+
+    return upload_source_archive(
+        site_name,
+        archive_path,
+        web_root_base=destination_base,
+        remove_archive=False,
+    )
+
+
+def test_upload_source_archive_rejects_directory_traversal(tmp_path):
+    site_name = "reject-traversal"
+    archive_path = tmp_path / "traversal.zip"
+
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("../escape.txt", "forbidden")
+
+    with pytest.raises(ValueError):
+        upload_source_archive(site_name, archive_path, web_root_base=tmp_path)
+
+
+def test_upload_source_archive_rejects_windows_backslashes(tmp_path):
+    site_name = "reject-windows"
+    archive_path = tmp_path / "windows.zip"
+
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("..\\escape.txt", "forbidden")
+
+    with pytest.raises(ValueError):
+        upload_source_archive(site_name, archive_path, web_root_base=tmp_path)
+
+
+def test_upload_source_archive_rejects_absolute_paths(tmp_path):
+    site_name = "reject-absolute"
+    archive_path = tmp_path / "absolute.zip"
+
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("/etc/passwd", "forbidden")
+
+    with pytest.raises(ValueError):
+        upload_source_archive(site_name, archive_path, web_root_base=tmp_path)

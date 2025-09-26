@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import shutil
-from pathlib import Path
+import zipfile
+from pathlib import Path, PurePosixPath
 from typing import Sequence
 
 from . import manager
@@ -63,7 +64,80 @@ DEFAULT_CONFIG_TEMPLATE_NO_SSL = """server {{
 """
 
 
-__all__ = ["create_hosting", "remove_hosting"]
+__all__ = ["create_hosting", "remove_hosting", "upload_source_archive"]
+
+
+def upload_source_archive(
+    site_name: str,
+    archive_path: str | Path,
+    *,
+    web_root_base: Path = Path("/var/www"),
+    remove_archive: bool = True,
+) -> Path:
+    """Upload an archived source bundle into the hosting document root.
+
+    The workflow mirrors manual deployment steps for static sites:
+
+    1. Remove any existing content inside the document root.
+    2. Copy the provided archive into the document root directory.
+    3. Extract the archive in-place to expose the site assets.
+
+    Parameters
+    ----------
+    site_name:
+        Hosting identifier reused to locate the document root.
+    archive_path:
+        Path to a ZIP file containing the site sources.
+    web_root_base:
+        Base directory of all hosted sites. Defaults to ``/var/www`` to match
+        typical Linux layouts.
+    remove_archive:
+        When ``True`` (default) delete the copied archive after extraction.
+
+    Returns
+    -------
+    Path
+        The fully-resolved document root path after the upload completes.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the archive is missing.
+    ValueError
+        If the archive is not a supported ZIP file.
+    """
+
+    _validate_site_name(site_name)
+
+    document_root = web_root_base / site_name
+    archive_path = Path(archive_path)
+
+    if not archive_path.is_file():
+        raise FileNotFoundError(f"archive not found: {archive_path}")
+
+    archive_realpath = archive_path.resolve()
+    document_root_realpath = document_root.resolve(strict=False)
+
+    if archive_realpath == document_root_realpath or document_root_realpath in archive_realpath.parents:
+        raise ValueError("archive_path must point outside of the target document root")
+
+    if document_root.exists():
+        shutil.rmtree(document_root)
+
+    document_root.mkdir(parents=True, exist_ok=True)
+
+    destination_archive = document_root / archive_path.name
+    shutil.copy2(archive_path, destination_archive)
+
+    if not _is_zip_file(destination_archive):
+        raise ValueError(f"unsupported archive format: {destination_archive}")
+
+    _extract_zip(destination_archive, document_root)
+    _normalize_document_root(document_root, archive_filename=destination_archive.name)
+
+    if remove_archive:
+        destination_archive.unlink(missing_ok=True)
+    return document_root
 
 
 def create_hosting(
@@ -379,3 +453,109 @@ def _validate_site_name(site_name: str) -> None:
 
     if Path(stripped).name != stripped:
         raise ValueError("site_name must not contain path separators")
+
+
+def _is_zip_file(archive_path: Path) -> bool:
+    """Return True if *archive_path* points to a valid ZIP archive."""
+
+    # zipfile.is_zipfile performs a light signature check without fully reading
+    # the archive, making it suitable for pre-flight validation.
+    return zipfile.is_zipfile(archive_path)
+
+
+def _extract_zip(archive_path: Path, destination: Path) -> None:
+    """Extract *archive_path* into *destination* directory safely.
+
+    Raises
+    ------
+    ValueError
+        If any archive member resolves outside of *destination* or has an
+        otherwise unsafe filename.
+    """
+
+    resolved_destination = destination.resolve(strict=False)
+
+    with zipfile.ZipFile(archive_path) as archive:
+        members_with_targets = [
+            (member, _resolve_member_target(member, resolved_destination))
+            for member in archive.infolist()
+        ]
+
+        for member, target_path in members_with_targets:
+            if member.is_dir():
+                target_path.mkdir(parents=True, exist_ok=True)
+                _apply_zip_permissions(member, target_path)
+                continue
+
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(member, "r") as source, target_path.open("wb") as destination_file:
+                shutil.copyfileobj(source, destination_file)
+            _apply_zip_permissions(member, target_path)
+
+
+def _resolve_member_target(member: zipfile.ZipInfo, destination: Path) -> Path:
+    """Return the extraction path for *member* ensuring it stays under *destination*."""
+
+    normalized_parts = _normalized_member_parts(member)
+    target_path = destination.joinpath(*normalized_parts)
+    resolved_target = target_path.resolve(strict=False)
+
+    if resolved_target != destination and destination not in resolved_target.parents:
+        raise ValueError(
+            f"zip entry '{member.filename}' escapes the destination directory"
+        )
+
+    return target_path
+
+
+def _normalized_member_parts(member: zipfile.ZipInfo) -> tuple[str, ...]:
+    """Normalize *member* path into safe components, rejecting traversal attempts."""
+
+    sanitized = member.filename.replace("\\", "/")
+    pure_path = PurePosixPath(sanitized)
+
+    if pure_path.is_absolute():
+        raise ValueError(f"zip entry '{member.filename}' uses an absolute path")
+
+    parts: list[str] = []
+    for part in pure_path.parts:
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            raise ValueError(f"zip entry '{member.filename}' contains parent directory references")
+        parts.append(part)
+
+    if not parts and not member.is_dir():
+        raise ValueError(f"zip entry '{member.filename}' has an empty filename")
+
+    return tuple(parts)
+
+
+def _apply_zip_permissions(member: zipfile.ZipInfo, target_path: Path) -> None:
+    """Apply Unix permission bits from *member* to *target_path* when present."""
+
+    unix_mode = member.external_attr >> 16
+    if unix_mode:
+        target_path.chmod(unix_mode)
+
+
+def _normalize_document_root(document_root: Path, *, archive_filename: str) -> None:
+    """Flatten extracted content when packaged inside a single subdirectory."""
+
+    # Ignore the uploaded archive itself when evaluating the tree structure.
+    entries = [entry for entry in document_root.iterdir() if entry.name != archive_filename]
+
+    if len(entries) != 1 or not entries[0].is_dir():
+        return
+
+    inner_root = entries[0]
+    for child in inner_root.iterdir():
+        target = document_root / child.name
+        if target.exists():
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+        shutil.move(str(child), target)
+
+    shutil.rmtree(inner_root)

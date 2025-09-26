@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Py Manage Nginx Demo</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="hero">
+      <div class="hero__content">
+        <h1 class="hero__title">Py Manage Nginx</h1>
+        <p class="hero__subtitle">
+          Lightweight helpers for provisioning and maintaining Nginx sites with
+          Python.
+        </p>
+        <button class="hero__cta" type="button" id="explore-button">
+          Explore features
+        </button>
+      </div>
+      <figure class="hero__visual">
+        <img
+          src="assets/logo.svg"
+          alt="Py Manage Nginx geometric logo"
+          width="320"
+          height="320"
+        />
+      </figure>
+    </header>
+
+    <main>
+      <section class="features" id="features">
+        <h2 class="section-title">Core features</h2>
+        <div class="feature-grid">
+          <article class="feature-card">
+            <h3 class="feature-card__title">Site provisioning</h3>
+            <p class="feature-card__body">
+              Quickly generate Nginx virtual hosts with sensible defaults and
+              easy customization options.
+            </p>
+          </article>
+          <article class="feature-card">
+            <h3 class="feature-card__title">SSL ready</h3>
+            <p class="feature-card__body">
+              Enable HTTPS in seconds with built-in support for self-signed or
+              Let's Encrypt certificates.
+            </p>
+          </article>
+          <article class="feature-card">
+            <h3 class="feature-card__title">Safe automation</h3>
+            <p class="feature-card__body">
+              Command execution is fully validated with ``nginx -t`` checks to
+              keep your configuration healthy.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="callout">
+        <div class="callout__text">
+          <h2>Ready to streamline your deployment?</h2>
+          <p>
+            Use the Python API to create or remove sites, list active
+            configurations, and reload Nginx with a single call.
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <small>© <span id="year"></span> Py Manage Nginx. Crafted for automation.</small>
+    </footer>
+
+    <script src="script.js"></script>
+  </body>
+</html>

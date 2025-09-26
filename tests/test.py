@@ -1,8 +1,59 @@
+"""Integration tests and utilities for py-manage-nginx."""
+
 from py_manage_nginx.manager import list_sites, reload_nginx, restart_nginx, test_nginx_configuration
 from py_manage_nginx.hosting import create_hosting, remove_hosting
 from pathlib import Path
+import shutil
 import pytest
 import os
+
+
+# Absolute paths for demo static site assets used in the upload helper.
+STATIC_SITE_DIR = Path(__file__).parent / "static_site"
+SOURCE_CODE_HOSTING_DIR = Path(__file__).parent / "source_code_hosting"
+
+
+def upload_static_site_to_sources(
+    *,
+    static_site_dir: Path | None = None,
+    destination_dir: Path | None = None,
+) -> Path:
+    """Upload the demo static site to the local hosting sources directory.
+
+    Parameters
+    ----------
+    static_site_dir:
+        Optional override pointing to the static website that should be copied.
+        When omitted the helper uses the bundled assets under ``tests/static_site``.
+    destination_dir:
+        Optional override for the upload target. Defaults to ``tests/source_code_hosting``.
+
+    Returns
+    -------
+    Path
+        The path pointing to the directory that now contains the static website.
+
+    Raises
+    ------
+    FileNotFoundError
+        Raised when the ``static_site_dir`` does not exist on disk.
+    """
+
+    resolved_source = static_site_dir or STATIC_SITE_DIR
+    resolved_destination = destination_dir or SOURCE_CODE_HOSTING_DIR
+
+    if not resolved_source.exists():
+        raise FileNotFoundError(f"Static site directory not found: {resolved_source}")
+
+    # Recreate the destination to ensure a clean copy and avoid stale artifacts.
+    if resolved_destination.exists():
+        shutil.rmtree(resolved_destination)
+    resolved_destination.mkdir(parents=True, exist_ok=True)
+
+    # copytree with dirs_exist_ok keeps the directory structure intact efficiently.
+    shutil.copytree(resolved_source, resolved_destination, dirs_exist_ok=True)
+
+    return resolved_destination
 
 
 SITE_NAME = "test-site-ssl"
@@ -157,3 +208,8 @@ def test_restart_nginx():
 def test_test_nginx_configuration():
     result = test_nginx_configuration(use_sudo=True)
     assert result.ok, f"restart nginx failed: {result.stderr or result.stdout}"
+
+
+if __name__ == "__main__":
+    # Cho phép người phát triển nhanh chóng đồng bộ website tĩnh vào thư mục nguồn.
+    upload_static_site_to_sources()

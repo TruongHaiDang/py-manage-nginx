@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = 'Use Python to manage Nginx on the machine.'
 readme = "README.md"
 requires-python = ">=3.8"
-license = "MIT"
+license = { file = "LICENSE.txt" }
 keywords = []
 authors = [
   { name = "Trương Hải Đăng", email = "haidanghth910@gmail.com" },

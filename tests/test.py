@@ -1,7 +1,11 @@
 """Integration tests and utilities for py-manage-nginx."""
 
 from py_manage_nginx.manager import list_sites, reload_nginx, restart_nginx, test_nginx_configuration
-from py_manage_nginx.hosting import create_hosting, remove_hosting
+from py_manage_nginx.hosting import (
+    create_hosting,
+    remove_hosting,
+    upload_source_archive,
+)
 from pathlib import Path
 import shutil
 import pytest
@@ -11,50 +15,6 @@ import os
 # Absolute paths for demo static site assets used in the upload helper.
 STATIC_SITE_DIR = Path(__file__).parent / "static_site"
 SOURCE_CODE_HOSTING_DIR = Path(__file__).parent / "source_code_hosting"
-
-
-def upload_static_site_to_sources(
-    *,
-    static_site_dir: Path | None = None,
-    destination_dir: Path | None = None,
-) -> Path:
-    """Upload the demo static site to the local hosting sources directory.
-
-    Parameters
-    ----------
-    static_site_dir:
-        Optional override pointing to the static website that should be copied.
-        When omitted the helper uses the bundled assets under ``tests/static_site``.
-    destination_dir:
-        Optional override for the upload target. Defaults to ``tests/source_code_hosting``.
-
-    Returns
-    -------
-    Path
-        The path pointing to the directory that now contains the static website.
-
-    Raises
-    ------
-    FileNotFoundError
-        Raised when the ``static_site_dir`` does not exist on disk.
-    """
-
-    resolved_source = static_site_dir or STATIC_SITE_DIR
-    resolved_destination = destination_dir or SOURCE_CODE_HOSTING_DIR
-
-    if not resolved_source.exists():
-        raise FileNotFoundError(f"Static site directory not found: {resolved_source}")
-
-    # Recreate the destination to ensure a clean copy and avoid stale artifacts.
-    if resolved_destination.exists():
-        shutil.rmtree(resolved_destination)
-    resolved_destination.mkdir(parents=True, exist_ok=True)
-
-    # copytree with dirs_exist_ok keeps the directory structure intact efficiently.
-    shutil.copytree(resolved_source, resolved_destination, dirs_exist_ok=True)
-
-    return resolved_destination
-
 
 SITE_NAME = "test-site-ssl"
 SERVER_NAMES = ["test.example.com", "www.test.example.com"]
@@ -210,6 +170,94 @@ def test_test_nginx_configuration():
     assert result.ok, f"restart nginx failed: {result.stderr or result.stdout}"
 
 
-if __name__ == "__main__":
-    # Cho phép người phát triển nhanh chóng đồng bộ website tĩnh vào thư mục nguồn.
-    upload_static_site_to_sources()
+def test_upload_source_archive(tmp_path):
+    site_name = SITE_NAME
+    archive_base = tmp_path / "static_site"
+    shutil.make_archive(
+        str(archive_base),
+        "zip",
+        root_dir=STATIC_SITE_DIR.parent,
+        base_dir=STATIC_SITE_DIR.name,
+    )
+    archive = archive_base.with_suffix(".zip")
+
+    if os.geteuid() == 0:
+        web_root_base = Path("/var/www")
+        document_root = web_root_base / site_name
+        if document_root.exists():
+            shutil.rmtree(document_root)
+    else:
+        web_root_base = tmp_path / "web"
+        document_root = web_root_base / site_name
+
+    # Seed document root with stale content to ensure the helper wipes it first.
+    (document_root / "old-dir").mkdir(parents=True, exist_ok=True)
+    (document_root / "old-dir" / "placeholder.txt").write_text("obsolete")
+    (document_root / "legacy.txt").write_text("legacy")
+
+    result_path = upload_source_archive(
+        site_name,
+        archive,
+        web_root_base=web_root_base,
+        remove_archive=True,
+    )
+
+    assert result_path == document_root
+    assert (document_root / "index.html").is_file()
+    assert (document_root / "assets" / "logo.svg").is_file()
+    assert not (document_root / archive.name).exists()
+    assert not (document_root / "legacy.txt").exists()
+    assert not (document_root / "old-dir").exists()
+
+
+def test_upload_source_archive_keep_archive(tmp_path):
+    site_name = "keep-archive"
+    archive_base = tmp_path / "static_site"
+    shutil.make_archive(
+        str(archive_base),
+        "zip",
+        root_dir=STATIC_SITE_DIR.parent,
+        base_dir=STATIC_SITE_DIR.name,
+    )
+    archive = archive_base.with_suffix(".zip")
+
+    web_root_base = tmp_path / "web"
+    document_root = web_root_base / site_name
+
+    result_path = upload_source_archive(
+        site_name,
+        archive,
+        web_root_base=web_root_base,
+        remove_archive=False,
+    )
+
+    assert result_path == document_root
+    assert (document_root / "index.html").is_file()
+    assert (document_root / archive.name).is_file()
+
+def upload_static_site_to_sources(
+    site_name: str = SITE_NAME,
+    archive: Path | None = None,
+    destination_base: Path = SOURCE_CODE_HOSTING_DIR,
+) -> Path:
+    """Convenience wrapper for syncing the demo site into a local folder."""
+
+    destination_base.mkdir(parents=True, exist_ok=True)
+    if archive is None:
+        archive_base = destination_base / f"{site_name}_source"
+        shutil.make_archive(
+            str(archive_base),
+            "zip",
+            root_dir=STATIC_SITE_DIR.parent,
+            base_dir=STATIC_SITE_DIR.name,
+        )
+        archive_path = archive_base.with_suffix(".zip")
+    else:
+        archive_path = Path(archive)
+
+    return upload_source_archive(
+        site_name,
+        archive_path,
+        web_root_base=destination_base,
+        remove_archive=False,
+    )

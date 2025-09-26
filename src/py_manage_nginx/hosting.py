@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import zipfile
 from pathlib import Path
 from typing import Sequence
 
@@ -63,7 +64,80 @@ DEFAULT_CONFIG_TEMPLATE_NO_SSL = """server {{
 """
 
 
-__all__ = ["create_hosting", "remove_hosting"]
+__all__ = ["create_hosting", "remove_hosting", "upload_source_archive"]
+
+
+def upload_source_archive(
+    site_name: str,
+    archive_path: str | Path,
+    *,
+    web_root_base: Path = Path("/var/www"),
+    remove_archive: bool = True,
+) -> Path:
+    """Upload an archived source bundle into the hosting document root.
+
+    The workflow mirrors manual deployment steps for static sites:
+
+    1. Remove any existing content inside the document root.
+    2. Copy the provided archive into the document root directory.
+    3. Extract the archive in-place to expose the site assets.
+
+    Parameters
+    ----------
+    site_name:
+        Hosting identifier reused to locate the document root.
+    archive_path:
+        Path to a ZIP file containing the site sources.
+    web_root_base:
+        Base directory of all hosted sites. Defaults to ``/var/www`` to match
+        typical Linux layouts.
+    remove_archive:
+        When ``True`` (default) delete the copied archive after extraction.
+
+    Returns
+    -------
+    Path
+        The fully-resolved document root path after the upload completes.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the archive is missing.
+    ValueError
+        If the archive is not a supported ZIP file.
+    """
+
+    _validate_site_name(site_name)
+
+    document_root = web_root_base / site_name
+    archive_path = Path(archive_path)
+
+    if not archive_path.is_file():
+        raise FileNotFoundError(f"archive not found: {archive_path}")
+
+    archive_realpath = archive_path.resolve()
+    document_root_realpath = document_root.resolve(strict=False)
+
+    if archive_realpath == document_root_realpath or document_root_realpath in archive_realpath.parents:
+        raise ValueError("archive_path must point outside of the target document root")
+
+    if document_root.exists():
+        shutil.rmtree(document_root)
+
+    document_root.mkdir(parents=True, exist_ok=True)
+
+    destination_archive = document_root / archive_path.name
+    shutil.copy2(archive_path, destination_archive)
+
+    if not _is_zip_file(destination_archive):
+        raise ValueError(f"unsupported archive format: {destination_archive}")
+
+    _extract_zip(destination_archive, document_root)
+    _normalize_document_root(document_root, archive_filename=destination_archive.name)
+
+    if remove_archive:
+        destination_archive.unlink(missing_ok=True)
+    return document_root
 
 
 def create_hosting(
@@ -379,3 +453,40 @@ def _validate_site_name(site_name: str) -> None:
 
     if Path(stripped).name != stripped:
         raise ValueError("site_name must not contain path separators")
+
+
+def _is_zip_file(archive_path: Path) -> bool:
+    """Return True if *archive_path* points to a valid ZIP archive."""
+
+    # zipfile.is_zipfile performs a light signature check without fully reading
+    # the archive, making it suitable for pre-flight validation.
+    return zipfile.is_zipfile(archive_path)
+
+
+def _extract_zip(archive_path: Path, destination: Path) -> None:
+    """Extract *archive_path* into *destination* directory."""
+
+    with zipfile.ZipFile(archive_path) as archive:
+        archive.extractall(destination)
+
+
+def _normalize_document_root(document_root: Path, *, archive_filename: str) -> None:
+    """Flatten extracted content when packaged inside a single subdirectory."""
+
+    # Ignore the uploaded archive itself when evaluating the tree structure.
+    entries = [entry for entry in document_root.iterdir() if entry.name != archive_filename]
+
+    if len(entries) != 1 or not entries[0].is_dir():
+        return
+
+    inner_root = entries[0]
+    for child in inner_root.iterdir():
+        target = document_root / child.name
+        if target.exists():
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+        shutil.move(str(child), target)
+
+    shutil.rmtree(inner_root)
